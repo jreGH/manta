@@ -1,0 +1,21 @@
+services:
+  manta:
+    build: .
+    network_mode: host
+    environment:
+      - ROS_DOMAIN_ID=42
+    volumes:
+      - ./src:/ws/src
+      - ./config:/ws/config
+      - ./launch:/ws/launch
+    command: ros2 launch manta_sim full_system.launch.py
+
+  manta-test:
+    build: .
+    entrypoint: /bin/bash
+    command: >
+      -c "source /opt/ros/jazzy/setup.sh &&
+          source /ws/install/setup.sh &&
+          cd /ws &&
+          python3 -m pytest src/manta_world_model/test src/manta_compression/test -v"
+    profiles: [test]

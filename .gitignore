@@ -1,0 +1,74 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Python
+*.pyc
+__pycache__/
+
+.pnpm-store/
+.pnpm-store/v10/files
+
+.expo/
+
+# claude-related
+.devcontainer
+.claude
+node_modules
+
+# Supabase CLI copies migrations here from infra/migrations/ — not canonical
+supabase/migrations/
+
+# Supabase local dev state
+supabase/.branches/
+supabase/.temp/
+
+# Environment files — secrets, never commit
+.env
+.env.local
+.env.*.local
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
+# Expo / EAS local state
+.expo/
+node_modules
+
+# Next.js
+.next/
+next-env.d.ts
+
+# Turbo
+.turbo/
+
+secrets/

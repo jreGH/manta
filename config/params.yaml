@@ -1,0 +1,68 @@
+world_model_node:
+  ros__parameters:
+    publish_rate_hz: 2.0
+    staleness_threshold_s: 30.0
+    process_noise: 0.1
+
+compression_node:
+  ros__parameters:
+    bandwidth_budget_chars: 160
+    safety_critical_override: true
+    scorer_weights:
+      proximity: 1.5
+      closing_speed: 2.0
+      hazard_type: 1.0
+      task_relevance: 1.8
+      novelty: 0.8
+
+comms_node:
+  ros__parameters:
+    min_resend_interval_s: 10.0
+    min_priority_change_to_resend: 0
+
+gateway_node:
+  ros__parameters:
+    latency_mean_s: 5.0
+    latency_std_s: 2.0
+    packet_loss_prob: 0.05
+
+diver_sim:
+  ros__parameters:
+    task_type: ordnance_disposal
+    target_x: 0.0
+    target_y: 0.0
+    target_z: -15.0
+    safety_radius: 10.0
+    start_x: 5.0
+    start_y: 0.0
+    start_z: -10.0
+    publish_rate_hz: 1.0
+
+shark_sim:
+  ros__parameters:
+    start_x: 30.0
+    start_y: 20.0
+    start_z: -8.0
+    speed: 1.5
+    attraction: 0.3   # 0=random walk, 1=direct approach toward diver
+    publish_rate_hz: 0.5
+    actor_id: shark-1
+
+explosive_sim:
+  ros__parameters:
+    x: 2.0
+    y: 3.0
+    z: -18.0
+    actor_id: explosive-1
+    label: explosive
+    republish_rate_hz: 0.1
+
+vessel_sim:
+  ros__parameters:
+    start_x: 300.0
+    start_y: -100.0
+    start_z: 0.0
+    course_deg: 225.0
+    speed_ms: 3.0
+    publish_rate_hz: 0.1
+    actor_id: vessel-1

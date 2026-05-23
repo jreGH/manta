@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>manta_comms</name>
+  <version>0.1.0</version>
+  <description>Rate-limited push-channel node delivering alerts to the focused actor</description>
+  <maintainer email="dev@example.com">Manta Dev</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <depend>rclpy</depend>
+  <depend>manta_interfaces</depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

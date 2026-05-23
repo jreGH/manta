@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>manta_world_model</name>
+  <version>0.1.0</version>
+  <description>Multi-actor world model with latency-aware projection and rule-based intent inference</description>
+  <maintainer email="dev@example.com">Manta Dev</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>manta_interfaces</depend>
+  <depend>geometry_msgs</depend>
+
+  <test_depend>pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
