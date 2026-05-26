@@ -12,7 +12,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "gateway_node = nodes.gateway_node:main",
+            "gateway_node = manta_gateway.nodes.gateway_node:main",
         ],
     },
 )

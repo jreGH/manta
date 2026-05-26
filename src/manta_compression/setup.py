@@ -13,7 +13,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "compression_node = nodes.compression_node:main",
+            "compression_node = manta_compression.nodes.compression_node:main",
         ],
     },
 )

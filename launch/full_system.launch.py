@@ -8,7 +8,7 @@ import os
 
 def generate_launch_description():
     config = PathJoinSubstitution([
-        FindPackageShare("manta_sim"), "..", "..", "..", "config", "params.yaml"
+        FindPackageShare("manta_sim"), "config", "params.yaml"
     ])
 
     world_model = Node(

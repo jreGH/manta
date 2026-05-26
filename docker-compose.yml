@@ -10,6 +10,16 @@ services:
       - ./launch:/ws/launch
     command: ros2 launch manta_sim full_system.launch.py
 
+  demo:
+    build: .
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./src:/ws/src
+      - ./demo:/ws/demo
+    command: python3 /ws/demo/server.py
+    profiles: [demo]
+
   manta-test:
     build: .
     entrypoint: /bin/bash

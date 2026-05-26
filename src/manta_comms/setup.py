@@ -12,7 +12,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "comms_node = nodes.comms_node:main",
+            "comms_node = manta_comms.nodes.comms_node:main",
         ],
     },
 )

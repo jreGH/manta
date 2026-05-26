@@ -13,7 +13,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "world_model_node = nodes.world_model_node:main",
+            "world_model_node = manta_world_model.nodes.world_model_node:main",
         ],
     },
 )
