@@ -112,6 +112,10 @@ VESSEL_OBS_COV       = 8.0
 VESSEL_EXPIRE_RADIUS = 115.0  # m from origin — vessel stops being observed beyond this
 VESSEL_SPAWN_MIN_T   = 55.0   # real-wall seconds between vessel spawns
 VESSEL_SPAWN_MAX_T   = 90.0
+VESSEL_WARNING_CPA   = 15.0   # m — projected CPA closer than this → diver evades
+VESSEL_CPA_HORIZON   = 45.0   # s — look-ahead window for CPA check
+VESSEL_OBS_POS_STD   = 3.0    # m — std-dev of positional noise on vessel observations
+VESSEL_OBS_HDG_STD   = 3.0    # deg — std-dev of heading noise on vessel velocity obs
 OWNSHIP_ORBIT_RADIUS = 25.0  # m
 OWNSHIP_SPEED        = 1.5   # m/s (~3 kt)
 OWNSHIP_ORBIT_OMEGA  = OWNSHIP_SPEED / OWNSHIP_ORBIT_RADIUS  # rad/s
@@ -189,6 +193,9 @@ def _new_state():
         "diver_aware_t": 0.0,
         "deter_shark":   None,
         "shark_deter_t": {"shark-1": 0.0, "shark-2": 0.0},
+        # vessel evasion
+        "evade_vessel":    None,       # vessel ID causing diver evasion; None if safe
+        "pre_evade_state": "working",  # diver state to restore after evasion ends
         # vessel pool — vessel-1 is static in _INIT_POS; extras are spawned dynamically
         "extra_vessels":      [],
         "next_vessel_id":     2,
@@ -247,6 +254,41 @@ def _step_shark(pos: np.ndarray, diver: np.ndarray, dt: float, attraction: float
     vel = direction * speed
     return pos + vel * dt, vel
 
+def _cpa_2d(v_pos: np.ndarray, v_vel: np.ndarray, d_pos: np.ndarray):
+    """Return (cpa_dist_m, time_to_cpa_s) in the 2-D horizontal plane.
+
+    t_cpa == 0 means the vessel is already at or past closest approach (receding).
+    """
+    rel  = v_pos[:2] - d_pos[:2]
+    vv   = v_vel[:2]
+    spd2 = float(np.dot(vv, vv))
+    if spd2 < 1e-6:
+        return float(np.linalg.norm(rel)), 0.0
+    t_raw = -float(np.dot(rel, vv)) / spd2
+    t_cpa = max(0.0, t_raw)
+    return float(np.linalg.norm(rel + vv * t_cpa)), t_cpa
+
+
+def _noisy_vessel_obs(true_pos: np.ndarray, true_vel: np.ndarray):
+    """Add realistic AIS/radar noise to a surface vessel observation."""
+    obs_pos = true_pos + np.array([
+        _rng.normal(0.0, VESSEL_OBS_POS_STD),
+        _rng.normal(0.0, VESSEL_OBS_POS_STD),
+        0.0,
+    ])
+    spd = float(np.linalg.norm(true_vel[:2]))
+    if spd > 0.01:
+        hdg_noise = math.radians(_rng.normal(0.0, VESSEL_OBS_HDG_STD))
+        cur_hdg   = math.atan2(true_vel[1], true_vel[0])
+        new_hdg   = cur_hdg + hdg_noise
+        obs_vel   = np.array([math.cos(new_hdg) * spd,
+                               math.sin(new_hdg) * spd,
+                               true_vel[2]])
+    else:
+        obs_vel = true_vel.copy()
+    return obs_pos, obs_vel
+
+
 def _run():
     global _S
     while True:
@@ -268,6 +310,32 @@ def _run():
 
         if S["diver_state"] == "transit" and diver_at_eod:
             S["diver_state"] = "working"
+
+        # ── Vessel CPA check ─────────────────────────────────────────────────
+        # Warn + evade if any vessel is projected to pass within VESSEL_WARNING_CPA
+        # of the diver within the next VESSEL_CPA_HORIZON seconds.
+        if S["diver_state"] in ("working", "transit", "evading"):
+            _all_v = []
+            if float(np.linalg.norm(pos["vessel-1"][:2])) <= VESSEL_EXPIRE_RADIUS:
+                _all_v.append(("vessel-1", pos["vessel-1"], vel["vessel-1"]))
+            for _v in S["extra_vessels"]:
+                _all_v.append((_v["id"], _v["pos"], _v["vel"]))
+            _min_cpa, _min_vid = 999.0, None
+            for _vid, _vp, _vv in _all_v:
+                _cd, _ct = _cpa_2d(_vp, _vv, pos["diver-1"])
+                if _cd < VESSEL_WARNING_CPA and 0 < _ct <= VESSEL_CPA_HORIZON:
+                    if _cd < _min_cpa:
+                        _min_cpa, _min_vid = _cd, _vid
+            if _min_vid is not None:
+                if S["diver_state"] != "evading":
+                    S["pre_evade_state"] = S["diver_state"]
+                    S["evade_vessel"]    = _min_vid
+                    S["diver_state"]     = "evading"
+                else:
+                    S["evade_vessel"] = _min_vid
+            elif S["diver_state"] == "evading":
+                S["diver_state"]  = S["pre_evade_state"]
+                S["evade_vessel"] = None
 
         if S["diver_state"] == "working":
             # Check whether a hunting shark has entered awareness range
@@ -314,8 +382,31 @@ def _run():
                 S["shark_state"][sid] = "hunt"
 
         # ── Diver movement ────────────────────────────────────────────────────
-        # Diver stops while managing a shark encounter
-        if S["diver_state"] in ("aware", "deterring"):
+        if S["diver_state"] == "evading":
+            # Swim perpendicular to vessel track, away from projected path
+            _vid = S["evade_vessel"]
+            _evp = _evv = None
+            if _vid == "vessel-1":
+                _evp, _evv = pos["vessel-1"], vel["vessel-1"]
+            else:
+                for _v2 in S["extra_vessels"]:
+                    if _v2["id"] == _vid:
+                        _evp, _evv = _v2["pos"], _v2["vel"]; break
+            if _evp is not None:
+                _vspd = float(np.linalg.norm(_evv[:2]))
+                if _vspd > 0.01:
+                    _fwd  = _evv[:2] / _vspd
+                    _perp = np.array([-_fwd[1], _fwd[0], 0.0])
+                    # choose side that takes diver away from vessel's track
+                    if float(np.dot(_perp[:2], pos["diver-1"][:2] - _evp[:2])) < 0:
+                        _perp = -_perp
+                    dv = _perp * DIVER_SPEED * 1.8   # evade faster than normal swim
+                else:
+                    dv = np.zeros(3)
+            else:
+                dv = np.zeros(3)
+        elif S["diver_state"] in ("aware", "deterring"):
+            # Diver stops while managing a shark encounter
             dv = np.zeros(3)
         else:
             to_tgt = _DIVER_TARGET - pos["diver-1"]
@@ -358,7 +449,8 @@ def _run():
             if float(np.linalg.norm(v["pos"][:2])) <= VESSEL_EXPIRE_RADIUS:
                 alive.append(v)
                 if now - v["last_obs"] >= 1.0 / VESSEL_OBS_HZ:
-                    S["tracker"].update(v["id"], _vprof, v["pos"], v["vel"],
+                    _opos, _ovel = _noisy_vessel_obs(v["pos"], v["vel"])
+                    S["tracker"].update(v["id"], _vprof, _opos, _ovel,
                                         np.eye(3) * VESSEL_OBS_COV, now)
                     v["last_obs"] = now
         S["extra_vessels"] = alive
@@ -378,7 +470,7 @@ def _run():
             oh.pop(0)
 
         # Emergency: diver is in active shark encounter
-        S["diver_emerg"] = bool(S["diver_state"] in ("aware", "deterring"))
+        S["diver_emerg"] = bool(S["diver_state"] in ("aware", "deterring", "evading"))
 
         # Publish observations  (now = time.time() was set above in state machine)
         ownship_pos = np.array([ox, oy, oz])
@@ -394,8 +486,13 @@ def _run():
             else:
                 hz = _OBS_HZ_NOMINAL[aid]
             if now - S["last_obs"][aid] >= 1.0 / hz:
-                S["tracker"].update(aid, profile, pos[aid], vel[aid],
-                                    np.eye(3) * _OBS_COV[aid], now)
+                if aid == "vessel-1":
+                    _opos, _ovel = _noisy_vessel_obs(pos[aid], vel[aid])
+                    S["tracker"].update(aid, profile, _opos, _ovel,
+                                        np.eye(3) * _OBS_COV[aid], now)
+                else:
+                    S["tracker"].update(aid, profile, pos[aid], vel[aid],
+                                        np.eye(3) * _OBS_COV[aid], now)
                 S["last_obs"][aid] = now
 
         beliefs = S["tracker"].project_all(now=now)
@@ -524,12 +621,13 @@ def _run():
         }
 
         _broadcast({
-            "t":           round(now - S["start"], 1),
-            "emerg":       S["diver_emerg"],
-            "diver_state": S["diver_state"],
-            "ownship":     ownship_dict,
-            "actors":      actors,
-            "comms":       comms,
+            "t":            round(now - S["start"], 1),
+            "emerg":        S["diver_emerg"],
+            "diver_state":  S["diver_state"],
+            "evade_vessel": S["evade_vessel"],
+            "ownship":      ownship_dict,
+            "actors":       actors,
+            "comms":        comms,
         })
         time.sleep(max(0.0, SIM_DT - (time.time() - t0)))
 
@@ -593,6 +691,7 @@ canvas{display:block}
 .bdg-deter{font-size:9px;padding:1px 5px;border-radius:2px;background:#001428;color:#42a5f5;border:1px solid #0d3a5f}
 .bdg-work{font-size:9px;padding:1px 5px;border-radius:2px;background:#001a0d;color:#69f0ae;border:1px solid #003d1a}
 .bdg-flee{font-size:9px;padding:1px 5px;border-radius:2px;background:#0d001a;color:#ce93d8;border:1px solid #3d005f}
+.bdg-evade{font-size:9px;padding:1px 5px;border-radius:2px;background:#001a08;color:#69f0ae;border:1px solid #006b2b;animation:blink .5s step-start infinite}
 /* intent bars */
 .il{margin-top:2px}
 .ir{display:grid;grid-template-columns:110px 1fr 36px;align-items:center;gap:4px;margin-bottom:2px}
@@ -999,7 +1098,7 @@ let _diverState = 'transit';
 function drawDiverEffect(diverActor){
   if(!diverActor) return;
   const ds = diverActor.diver_state || _diverState;
-  if(ds !== 'aware' && ds !== 'deterring') return;
+  if(ds !== 'aware' && ds !== 'deterring' && ds !== 'evading') return;
   const ox = wx(diverActor.x), oy = wy(diverActor.y);
   const now = Date.now();
 
@@ -1015,7 +1114,7 @@ function drawDiverEffect(diverActor){
     ctx.fillStyle = '#ffb300cc';
     ctx.fillText('⚠ SHARK NEARBY', ox, oy - 26);
     ctx.textAlign = 'left';
-  } else {
+  } else if(ds === 'deterring'){
     // Deterring: two expanding concentric rings (acoustic deterrent pulse)
     const period = 1100; // ms per cycle
     for(let offset = 0; offset < 2; offset++){
@@ -1031,6 +1130,59 @@ function drawDiverEffect(diverActor){
     ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center';
     ctx.fillStyle = '#42a5f5bb';
     ctx.fillText('◉ DETERRING', ox, oy - 26);
+    ctx.textAlign = 'left';
+  } else {
+    // Evading vessel — rapid expanding green rings (propeller danger)
+    const period3 = 900; // ms per ring cycle — faster than deterrence
+    for(let offset = 0; offset < 2; offset++){
+      const phase = ((now + offset * period3 / 2) % period3) / period3;
+      const r = 16 + phase * 58;
+      const alpha = (1 - phase) * (offset === 0 ? 0.90 : 0.55);
+      ctx.beginPath(); ctx.arc(ox, oy, r, 0, Math.PI * 2);
+      ctx.strokeStyle = '#69f0ae' + Math.round(alpha * 255).toString(16).padStart(2,'0');
+      ctx.lineWidth = offset === 0 ? 2.5 : 1.5;
+      ctx.setLineDash([]); ctx.stroke();
+    }
+    // Outer dashed pulsing ring
+    const pulse3 = 0.5 + 0.5 * Math.sin(now / 200);
+    ctx.beginPath(); ctx.arc(ox, oy, 52 + pulse3 * 8, 0, Math.PI * 2);
+    ctx.strokeStyle = '#69f0ae' + Math.round((0.15 + pulse3 * 0.12) * 255).toString(16).padStart(2,'0');
+    ctx.lineWidth = 1; ctx.setLineDash([3, 5]); ctx.stroke(); ctx.setLineDash([]);
+    // Label
+    ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center';
+    ctx.fillStyle = '#69f0aebb';
+    ctx.fillText('⬆ EVADING VESSEL', ox, oy - 34);
+    ctx.textAlign = 'left';
+  }
+}
+
+/* ── vessel projected track ── */
+let _evadeVessel = null;   // vessel ID flagged as threatening (from server)
+
+function drawVesselProjection(a){
+  const spd = Math.sqrt(a.vx**2 + a.vy**2);
+  if(spd < 0.05) return;
+  const isThreat = (a.id === _evadeVessel);
+  const projT    = 55;   // seconds ahead to project
+  const ex = a.x + a.vx * projT;
+  const ey = a.y + a.vy * projT;
+  const c  = isThreat ? '#ff7043' : '#69f0ae';
+  const lA = isThreat ? 0.60 : 0.18;
+
+  ctx.beginPath();
+  ctx.moveTo(wx(a.x), wy(a.y));
+  ctx.lineTo(wx(ex),  wy(ey));
+  ctx.strokeStyle = c + Math.round(lA * 255).toString(16).padStart(2,'0');
+  ctx.lineWidth   = isThreat ? 1.8 : 1.0;
+  ctx.setLineDash(isThreat ? [6, 4] : [3, 7]);
+  ctx.stroke(); ctx.setLineDash([]);
+
+  if(isThreat){
+    // Warning label at midpoint of projected track
+    const mx = a.x + a.vx * 28, my = a.y + a.vy * 28;
+    ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center';
+    ctx.fillStyle = '#ff7043cc';
+    ctx.fillText('⚠ VESSEL TRACK', wx(mx), wy(my) - 9);
     ctx.textAlign = 'left';
   }
 }
@@ -1095,6 +1247,7 @@ function render(actors, ownship){
   drawOwnship(ownship);
   drawTxBeam();                 // acoustic comms beam (below uncertainty rings)
   for(const a of actors) drawTrail(a);
+  for(const a of actors) if(a.label === 'vessel') drawVesselProjection(a);
   for(const a of actors) drawUnc(a);
   drawDiverEffect(diverActor);  // awareness / deterrence rings (below icons)
   drawCorrections();
@@ -1127,6 +1280,7 @@ function updateSidebar(actors){
     else if(a.diver_state==='working')   diverStateBadge='<span class="bdg-work">ON SITE</span>';
     else if(a.diver_state==='aware')     diverStateBadge='<span class="bdg-aware">⚠ SHARK NEARBY</span>';
     else if(a.diver_state==='deterring') diverStateBadge='<span class="bdg-deter">◉ DETERRING</span>';
+    else if(a.diver_state==='evading')   diverStateBadge='<span class="bdg-evade">⬆ EVADING VESSEL</span>';
     // Shark-state badge
     let sharkStateBadge='';
     if(a.shark_state==='hunt')      sharkStateBadge='<span class="bdg-emerg">⟶ HUNTING</span>';
@@ -1245,7 +1399,8 @@ sse.onmessage = e => {
   document.getElementById('ac').textContent = s.actors.length;
   document.getElementById('emerg-pill').style.display = s.emerg ? 'block' : 'none';
 
-  _diverState = s.diver_state || 'transit';
+  _diverState  = s.diver_state  || 'transit';
+  _evadeVessel = s.evade_vessel || null;
 
   // TX beam + toast on fresh transmission
   if(s.comms && s.comms.fresh && s.comms.last_text){
